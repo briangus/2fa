@@ -194,7 +194,7 @@ type Keychain struct {
 }
 
 type Key struct {
-	Raw    []byte
+	Raw    string
 	Digits int
 	Offset int64 // offset of counter
 }
@@ -332,7 +332,7 @@ func (c *Keychain) add(name string) {
 	if *flagHotp {
 		offset = 0
 	}
-    c.keys[name] =  Key{[]byte(text), size, offset}
+    c.keys[name] =  Key{text, size, offset}
 	c.writeKeyChain()
 }
 
@@ -342,14 +342,18 @@ func (c *Keychain) code(name string) string {
 		log.Fatalf("no such key %q", name)
 	}
 	var code int
+	thekey, err := decodeKey(k.Raw)
+	if err != nil {
+		log.Fatalf("invalid key: %v", err)
+	}
 	if k.Offset != -1 {
 		k.Offset ++
 		c.keys[name] = Key{k.Raw, k.Digits, k.Offset}
-		code = hotp(k.Raw, uint64(k.Offset), k.Digits)
+		code = hotp(thekey, uint64(k.Offset), k.Digits)
 		c.writeKeyChain()
 	} else {
 		// Time-based key.
-		code = totp(k.Raw, time.Now(), k.Digits)
+		code = totp(thekey, time.Now(), k.Digits)
 	}
 	return fmt.Sprintf("%0*d", k.Digits, code)
 }
