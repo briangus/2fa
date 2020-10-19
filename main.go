@@ -66,7 +66,6 @@ import (
 //	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
-	"crypto/md5"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -74,7 +73,6 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/json"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -90,17 +88,19 @@ import (
 
 	"github.com/atotto/clipboard"
 	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/crypto/scrypt"
 )
 
 var (
-	flagAdd  = flag.Bool("add", false, "add a key")
-	flagList = flag.Bool("list", false, "list keys")
-	flagHotp = flag.Bool("hotp", false, "add key as HOTP (counter-based) key")
-	flag7    = flag.Bool("7", false, "generate 7-digit code")
-	flag8    = flag.Bool("8", false, "generate 8-digit code")
-	flagClip = flag.Bool("clip", false, "copy code to the clipboard")
-	flagp    = flag.Bool("p", false, "passphrase piped in")
-	flagDump = flag.Bool("dump", false, "Dump json data")
+	flagAdd    = flag.Bool("add", false, "add a key")
+	flagList   = flag.Bool("list", false, "list keys")
+	flagHotp   = flag.Bool("hotp", false, "add key as HOTP (counter-based) key")
+	flag7      = flag.Bool("7", false, "generate 7-digit code")
+	flag8      = flag.Bool("8", false, "generate 8-digit code")
+	flagClip   = flag.Bool("clip", false, "copy code to the clipboard")
+	flagp      = flag.Bool("p", false, "passphrase piped in")
+	flagDump   = flag.Bool("dump", false, "Dump json data")
+	flagImport = flag.String("import", "", "Import json data from file")
 )
 
 func usage() {
@@ -109,6 +109,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "\t2fa [-p] -list\n")
 	fmt.Fprintf(os.Stderr, "\t2fa [-p] [-clip] keyname\n")
 	fmt.Fprintf(os.Stderr, "\t2fa [-p] -dump\n")
+	fmt.Fprintf(os.Stderr, "\t2fa [-p] -import file.json\n")
 	os.Exit(2)
 }
 
@@ -144,8 +145,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("error reading passphrase: %v", err)
 	}
+	keychainfile :=filepath.Join(os.Getenv("HOME") , ".2fa.json")
 
-	k := readKeychain(filepath.Join(os.Getenv("HOME"), ".2fa.json"), passphrase)
+	k := readKeychain(keychainfile, passphrase)
 
 	if *flagDump {
 		data, err := json.Marshal(k.keys)
@@ -153,6 +155,27 @@ func main() {
 			log.Fatalf("Error dumping file: %v", err)
 		}
 		fmt.Println(string(data))
+		return
+	}
+
+	if *flagImport != "" {
+		data, err := ioutil.ReadFile(*flagImport)
+		if err != nil {
+			log.Fatalf("Error reading file: %v", err)
+		}
+		c := &Keychain{
+			file: keychainfile,
+			passphrase: passphrase,
+			keys: make(map[string]Key),
+		}
+		err = json.Unmarshal(data, &(c.keys))
+		if err != nil {
+			log.Fatalf("error Unmarshalling file %s %v", keychainfile, err)
+		}
+		err = c.writeKeyChain()
+		if err != nil {
+			log.Fatalf("Error writing file %s %v", c.file, err)
+		}
 		return
 	}
 
@@ -199,14 +222,17 @@ type Key struct {
 	Offset int64 // offset of counter
 }
 
-func createHash(key string) string {
-	hasher := md5.New()
-	hasher.Write([]byte(key))
-	return hex.EncodeToString(hasher.Sum(nil))
+func getCipherBlock(passphrase string) (cipher.Block, error) {
+	salt := []byte{0x77, 0x33, 0x1F, 0xF0, 0x23, 0xFF, 0x00, 0x07}
+	dk, err := scrypt.Key([]byte(passphrase), salt, 1<<15, 8, 1, 32)
+	if err != nil {
+		return nil, err
+	}
+	return aes.NewCipher(dk)
 }
 
 func encrypt(data []byte, passphrase string) ([]byte, error) {
-	block, err := aes.NewCipher([]byte(createHash(passphrase)))
+	block, err := getCipherBlock(passphrase)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -222,7 +248,7 @@ func encrypt(data []byte, passphrase string) ([]byte, error) {
 }
 
 func decrypt(data []byte, passphrase string) ([]byte, error) {
-	block, err := aes.NewCipher([]byte(createHash(passphrase)))
+	block, err := getCipherBlock(passphrase)
 	if err != nil {
 		return []byte{}, err
 	}
