@@ -1,5 +1,22 @@
 2fa is a two-factor authentication agent.
 
+This fork adds encryption to 2fa and stores the data as encrypted json.
+
+
+Usage:
+```
+2fa -add [-7] [-8] [-hotp] keyname
+2fa [-p] -list
+2fa [-p] [-clip] keyname
+2fa [-p] -dump
+2fa [-p] -import file.json
+```
+the `-p` flag reads the password from stdin so you can use it with stuff like pass
+
+
+Below is the original readme that I'm too lazy to update....
+---
+
 Usage:
 
     go get -u rsc.io/2fa
